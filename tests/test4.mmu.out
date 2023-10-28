@@ -1,0 +1,8 @@
+pager_create pid 0
+pager_extend pid 0 vaddr 0x60000000
+pager_fault pid 0 vaddr 0x60000000
+mmu_zero_fill frame 0
+mmu_resident pid 0 vaddr 0x60000000 prot 1 frame 0
+pager_fault pid 0 vaddr 0x60000000
+mmu_chprot pid 0 vaddr 0x60000000 prot 3
+pager_destroy pid 0

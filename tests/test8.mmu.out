@@ -1,0 +1,51 @@
+pager_create pid 0
+pager_extend pid 0 vaddr 0x60000000
+pager_extend pid 0 vaddr 0x60001000
+pager_extend pid 0 vaddr 0x60002000
+pager_extend pid 0 vaddr 0x60003000
+pager_extend pid 0 vaddr 0x60004000
+pager_fault pid 0 vaddr 0x60000000
+mmu_zero_fill frame 0
+mmu_resident pid 0 vaddr 0x60000000 prot 1 frame 0
+pager_fault pid 0 vaddr 0x60001000
+mmu_zero_fill frame 1
+mmu_resident pid 0 vaddr 0x60001000 prot 1 frame 1
+pager_fault pid 0 vaddr 0x60002000
+mmu_zero_fill frame 2
+mmu_resident pid 0 vaddr 0x60002000 prot 1 frame 2
+pager_fault pid 0 vaddr 0x60003000
+mmu_zero_fill frame 3
+mmu_resident pid 0 vaddr 0x60003000 prot 1 frame 3
+pager_fault pid 0 vaddr 0x60004000
+mmu_chprot pid 0 vaddr 0x60000000 prot 0
+mmu_chprot pid 0 vaddr 0x60001000 prot 0
+mmu_chprot pid 0 vaddr 0x60002000 prot 0
+mmu_chprot pid 0 vaddr 0x60003000 prot 0
+mmu_nonresident pid 0 vaddr 0x60000000
+mmu_zero_fill frame 0
+mmu_resident pid 0 vaddr 0x60004000 prot 1 frame 0
+pager_fault pid 0 vaddr 0x60000000
+mmu_nonresident pid 0 vaddr 0x60001000
+mmu_zero_fill frame 1
+mmu_resident pid 0 vaddr 0x60000000 prot 1 frame 1
+pager_fault pid 0 vaddr 0x60001000
+mmu_nonresident pid 0 vaddr 0x60002000
+mmu_zero_fill frame 2
+mmu_resident pid 0 vaddr 0x60001000 prot 1 frame 2
+pager_fault pid 0 vaddr 0x60002000
+mmu_nonresident pid 0 vaddr 0x60003000
+mmu_zero_fill frame 3
+mmu_resident pid 0 vaddr 0x60002000 prot 1 frame 3
+pager_fault pid 0 vaddr 0x60003000
+mmu_chprot pid 0 vaddr 0x60004000 prot 0
+mmu_chprot pid 0 vaddr 0x60000000 prot 0
+mmu_chprot pid 0 vaddr 0x60001000 prot 0
+mmu_chprot pid 0 vaddr 0x60002000 prot 0
+mmu_nonresident pid 0 vaddr 0x60004000
+mmu_zero_fill frame 0
+mmu_resident pid 0 vaddr 0x60003000 prot 1 frame 0
+pager_fault pid 0 vaddr 0x60004000
+mmu_nonresident pid 0 vaddr 0x60000000
+mmu_zero_fill frame 1
+mmu_resident pid 0 vaddr 0x60004000 prot 1 frame 1
+pager_destroy pid 0

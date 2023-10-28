@@ -1,0 +1,3 @@
+pager_create pid 0
+pager_extend pid 0 vaddr 0x60000000
+pager_destroy pid 0

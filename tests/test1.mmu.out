@@ -1,0 +1,2 @@
+pager_create pid 0
+pager_destroy pid 0

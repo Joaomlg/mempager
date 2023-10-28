@@ -1,0 +1,12 @@
+pager_create pid 0
+pager_extend pid 0 vaddr 0x60000000
+pager_extend pid 0 vaddr 0x60001000
+pager_extend pid 0 vaddr 0x60002000
+pager_extend pid 0 vaddr 0x60003000
+pager_extend pid 0 vaddr 0x60004000
+pager_extend pid 0 vaddr 0x60005000
+pager_extend pid 0 vaddr 0x60006000
+pager_extend pid 0 vaddr 0x60007000
+pager_extend pid 0 vaddr (nil)
+pager_extend pid 0 vaddr (nil)
+pager_destroy pid 0
