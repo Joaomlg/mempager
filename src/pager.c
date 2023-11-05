@@ -43,12 +43,15 @@ typedef struct pager {
 pager_t pager;
 
 void pager_init(int nframes, int nblocks) {
+  pager.clock = 0;
+
   pager.nframes = nframes;
   pager.frames_free = nframes;
   pager.frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
 
   for (int i=0; i<nframes; i++) {
     pager.frames[i].pid = -1;
+    pager.frames[i].prot = PROT_NONE;
   }
 
   pager.nblocks = nblocks;
@@ -140,7 +143,47 @@ void pager_fault(pid_t pid, void *addr) {
     // Proc hasn't the page
     // Probably is trying to read
     if (pager.frames_free == 0) {
-      return;  // TODO: implement disk swap
+      while(1){
+        if (pager.frames[pager.clock].prot == PROT_NONE) {
+          int block = 0;
+          for (; pager.clock<pager.nblocks; block++) {
+            if (pager.block2pid[block] == NULL) {
+              pager.block2pid[block] = pager.frames[pager.clock].pid;
+              pager.blocks_free--;
+              break;
+            }
+          }
+
+          if (pager.frames[pager.clock].dirty == 1) {
+            mmu_disk_write(pager.clock, block);
+          }
+
+          proc_t *procToDisk = NULL;
+
+          for (int i=0; i<pager.nblocks; i++) {
+            if (pager.pid2proc[i]->pid == pid) {
+              procToDisk = pager.pid2proc[i];
+              break;
+            }
+          }
+
+          procToDisk->pages[page].on_disk = 1;
+          pager.frames[pager.clock].pid = -1;
+          pager.frames_free++;
+
+          mmu_nonresident(pid, (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE))));
+
+          pager.clock++;
+          pager.clock %= pager.nframes;
+          break;
+        } else {
+          pager.frames[pager.clock].prot = PROT_NONE;
+          mmu_chprot(pager.frames[pager.clock].pid, (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE))), pager.frames[pager.clock].prot);
+          pager.clock++;
+          pager.clock %= pager.nframes;
+        }
+
+      }
     }
 
     int frame = 0;
@@ -166,6 +209,7 @@ void pager_fault(pid_t pid, void *addr) {
     int frame = proc->pages[page].frame;
 
     pager.frames[frame].prot |= PROT_WRITE;
+    pager.frames[frame].dirty == 1;
 
     mmu_chprot(pid, addr, pager.frames[frame].prot);
   }
