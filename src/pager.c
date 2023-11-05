@@ -172,7 +172,31 @@ void pager_fault(pid_t pid, void *addr) {
 }
 
 int pager_syslog(pid_t pid, void *addr, size_t len) {
+  proc_t *proc = NULL;
+
+  for (int i=0; i<pager.nblocks; i++) {
+    if (pager.pid2proc[i]->pid == pid) {
+      proc = pager.pid2proc[i];
+      break;
+    }
+  }
+
+  if (proc == NULL) {
+    return -1;
+  }
+
+  int page = ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+
+  if (page >= proc->npages) {
+    return -1;
+  }
   
+  for(int i = 0; i < len; i++) {
+		printf("%02x", (unsigned)pmem[(proc->pages[page].frame * sysconf(_SC_PAGESIZE)) + i]);
+		if(i == len-1) printf("\n");
+	}
+
+  return 0;
 }
 
 void pager_destroy(pid_t pid) {
