@@ -15,6 +15,9 @@
 
 3. Referências bibliográficas
 
+https://man7.org/linux/man-pages/man3/sysconf.3.html
+https://man7.org/linux/man-pages/man3/intptr_t.3type.html
+
 4. Detalhes de implementação
 
     1. Descreva e justifique as estruturas de dados utilizadas em sua solução.
