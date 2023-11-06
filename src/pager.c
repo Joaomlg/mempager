@@ -93,10 +93,9 @@ void pager_create(pid_t pid) {
 
 void *pager_extend(pid_t pid) {
   proc_t *proc = NULL;
-  frame_data_t *frame = NULL;
 
   if (pager.blocks_free == 0) {
-    return;
+    return NULL;
   }
 
   for (int i=0; i<pager.nblocks; i++) {
@@ -108,11 +107,11 @@ void *pager_extend(pid_t pid) {
 
   // TODO: throw an error?!
   if (proc == NULL) {
-    return;
+    return NULL;
   }
 
   if (proc->npages + 1 > proc->maxpages) {
-    return;  // TODO: throw an error?!
+    return NULL;  // TODO: throw an error?!
   }
 
   proc->npages++;
