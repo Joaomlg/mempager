@@ -43,7 +43,7 @@ typedef struct pager {
 pager_t pager;
 
 void pager_init(int nframes, int nblocks) {
-  pager.clock = 0;
+  pager.clock = -1;
 
   pager.nframes = nframes;
   pager.frames_free = nframes;
@@ -52,6 +52,7 @@ void pager_init(int nframes, int nblocks) {
   for (int i=0; i<nframes; i++) {
     pager.frames[i].pid = -1;
     pager.frames[i].prot = PROT_NONE;
+    pager.frames[i].dirty = 0;
   }
 
   pager.nblocks = nblocks;
@@ -144,22 +145,15 @@ void pager_fault(pid_t pid, void *addr) {
     // Probably is trying to read
     if (pager.frames_free == 0) {
       while(1){
-        if (pager.frames[pager.clock].prot == PROT_NONE) {
-          int block = 0;
-          for (; pager.clock<pager.nblocks; block++) {
-            if (pager.block2pid[block] == NULL) {
-              pager.block2pid[block] = pager.frames[pager.clock].pid;
-              pager.blocks_free--;
-              break;
-            }
-          }
+        pager.clock++;
+        pager.clock %= pager.nframes;
 
-          if (pager.frames[pager.clock].dirty == 1) {
-            mmu_disk_write(pager.clock, block);
-          }
+        void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE)));
+
+        if (pager.frames[pager.clock].prot == PROT_NONE) {
+          // Find a frame that can be desalocated
 
           proc_t *procToDisk = NULL;
-
           for (int i=0; i<pager.nblocks; i++) {
             if (pager.pid2proc[i]->pid == pid) {
               procToDisk = pager.pid2proc[i];
@@ -167,35 +161,59 @@ void pager_fault(pid_t pid, void *addr) {
             }
           }
 
-          procToDisk->pages[page].on_disk = 1;
+          int procToDiskPage = 0;
+          for (; procToDiskPage<procToDisk->maxpages; procToDiskPage++) {
+            if (procToDisk->pages[procToDiskPage].frame == pager.clock) {
+              break;
+            }
+          }
+
+          procToDisk->pages[procToDiskPage].frame = -1;
+
+          // Just move to disk if frame is dirty
+          if (pager.frames[pager.clock].dirty == 1) {
+            int block = 0;
+            for (; block<pager.nblocks; block++) {
+              if (pager.block2pid[block] == NULL) {
+                break;
+              }
+            }
+
+            pager.block2pid[block] = pager.frames[pager.clock].pid;
+            pager.blocks_free--;
+
+            mmu_disk_write(pager.clock, block);
+
+            procToDisk->pages[procToDiskPage].block = block;
+            procToDisk->pages[procToDiskPage].on_disk = 1;
+          }
+
           pager.frames[pager.clock].pid = -1;
           pager.frames_free++;
 
-          mmu_nonresident(pid, (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE))));
+          mmu_nonresident(pid, vaddr);
 
-          pager.clock++;
-          pager.clock %= pager.nframes;
           break;
         } else {
+          // Give a second chance to the frame
           pager.frames[pager.clock].prot = PROT_NONE;
-          mmu_chprot(pager.frames[pager.clock].pid, (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE))), pager.frames[pager.clock].prot);
-          pager.clock++;
-          pager.clock %= pager.nframes;
+          mmu_chprot(pager.frames[pager.clock].pid, vaddr, pager.frames[pager.clock].prot);
         }
-
       }
     }
 
     int frame = 0;
     for (; frame<pager.nframes; frame++) {
       if (pager.frames[frame].pid == -1) {
-        pager.frames[frame].pid = pid;
-        pager.frames[frame].page = page;
-        pager.frames[frame].prot = PROT_READ;
-        pager.frames_free--;
         break;
       }
     }
+
+    pager.frames[frame].pid = pid;
+    pager.frames[frame].page = page;
+    pager.frames[frame].prot = PROT_READ;
+    pager.frames[frame].dirty = 0;
+    pager.frames_free--;
 
     proc->pages[page].frame = frame;
     proc->pages[page].on_disk = 0;
