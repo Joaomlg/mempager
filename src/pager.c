@@ -114,6 +114,18 @@ void *pager_extend(pid_t pid) {
     return NULL;  // TODO: throw an error?!
   }
 
+  int block = 0;
+  for (; block<pager.nblocks; block++) {
+    if (pager.block2pid[block] == -1) {
+      break;
+    }
+  }
+
+  pager.block2pid[block] = pid;
+  pager.blocks_free--;
+
+  proc->pages[proc->npages].block = block;
+
   proc->npages++;
 
   return (void*) UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE);
@@ -176,19 +188,7 @@ void pager_fault(pid_t pid, void *addr) {
 
           // Just move to disk if frame is dirty
           if (pager.frames[pager.clock].dirty == 1) {
-            int block = 0;
-            for (; block<pager.nblocks; block++) {
-              if (pager.block2pid[block] == -1) {
-                break;
-              }
-            }
-
-            pager.block2pid[block] = pager.frames[pager.clock].pid;
-            pager.blocks_free--;
-
-            mmu_disk_write(pager.clock, block);
-
-            procToDisk->pages[procToDiskPage].block = block;
+            mmu_disk_write(pager.clock, procToDisk->pages[procToDiskPage].block);
             procToDisk->pages[procToDiskPage].on_disk = 1;
           }
 
@@ -216,16 +216,12 @@ void pager_fault(pid_t pid, void *addr) {
 
     if (proc->pages[page].on_disk) {
       mmu_disk_read(proc->pages[page].block, frame);
-      
-      pager.block2pid[proc->pages[page].block] = -1;
-      pager.blocks_free ++;
+      proc->pages[page].on_disk = 0;
     } else {
       mmu_zero_fill(frame);
     }
 
     proc->pages[page].frame = frame;
-    proc->pages[page].on_disk = 0;
-    proc->pages[page].block = -1;
 
     mmu_resident(pid, addr, frame, pager.frames[frame].prot);
   } else {
