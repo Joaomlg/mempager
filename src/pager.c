@@ -64,7 +64,7 @@ void pager_init(int nframes, int nblocks) {
   pager.pid2proc = (proc_t**) malloc(nblocks * sizeof(pid_t*));
   
   for (int i=0; i<nblocks; i++) {
-    pager.block2pid[i] = NULL;
+    pager.block2pid[i] = -1;
     pager.pid2proc[i] = NULL;
   }
 }
@@ -170,11 +170,16 @@ void pager_fault(pid_t pid, void *addr) {
 
           procToDisk->pages[procToDiskPage].frame = -1;
 
+          pager.frames[pager.clock].pid = -1;
+          pager.frames_free++;
+
+          mmu_nonresident(pid, vaddr);
+
           // Just move to disk if frame is dirty
           if (pager.frames[pager.clock].dirty == 1) {
             int block = 0;
             for (; block<pager.nblocks; block++) {
-              if (pager.block2pid[block] == NULL) {
+              if (pager.block2pid[block] == -1) {
                 break;
               }
             }
@@ -187,11 +192,6 @@ void pager_fault(pid_t pid, void *addr) {
             procToDisk->pages[procToDiskPage].block = block;
             procToDisk->pages[procToDiskPage].on_disk = 1;
           }
-
-          pager.frames[pager.clock].pid = -1;
-          pager.frames_free++;
-
-          mmu_nonresident(pid, vaddr);
 
           break;
         } else {
@@ -215,11 +215,19 @@ void pager_fault(pid_t pid, void *addr) {
     pager.frames[frame].dirty = 0;
     pager.frames_free--;
 
+    if (proc->pages[page].on_disk) {
+      mmu_disk_read(proc->pages[page].block, frame);
+      
+      pager.block2pid[proc->pages[page].block] = -1;
+      pager.blocks_free ++;
+    } else {
+      mmu_zero_fill(frame);
+    }
+
     proc->pages[page].frame = frame;
     proc->pages[page].on_disk = 0;
     proc->pages[page].block = -1;
 
-    mmu_zero_fill(frame);
     mmu_resident(pid, addr, frame, pager.frames[frame].prot);
   } else {
     // Proc already has the page
@@ -227,7 +235,7 @@ void pager_fault(pid_t pid, void *addr) {
     int frame = proc->pages[page].frame;
 
     pager.frames[frame].prot |= PROT_WRITE;
-    pager.frames[frame].dirty == 1;
+    pager.frames[frame].dirty = 1;
 
     mmu_chprot(pid, addr, pager.frames[frame].prot);
   }
