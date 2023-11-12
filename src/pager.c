@@ -53,6 +53,7 @@ void pager_init(int nframes, int nblocks) {
     pager.frames[i].pid = -1;
     pager.frames[i].prot = PROT_NONE;
     pager.frames[i].dirty = 0;
+    pager.frames[i].page = -1;
   }
 
   pager.nblocks = nblocks;
@@ -305,6 +306,7 @@ void pager_destroy(pid_t pid) {
   for (int i=0; i<pager.nframes; i++) {
     if (pager.frames[i].pid == pid) {
       pager.frames[i].pid = -1;
+      pager.frames[i].page = -1;
       pager.frames[i].prot = PROT_NONE;
       pager.frames[i].dirty = 0;
       pager.frames_free++;
