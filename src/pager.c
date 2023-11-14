@@ -53,15 +53,29 @@ void clean_frame(frame_data_t *frame) {
   frame->prot = PROT_NONE;
 }
 
+void clean_proc(proc_t *proc) {
+  proc->pid = -1;
+  proc->npages = 0;
+
+  for (int j=0; j<proc->maxpages; j++) {
+    proc->pages[j].frame = -1;
+    proc->pages[j].block = -1;
+    proc->pages[j].on_disk = 0;
+  }
+}
+
 /****************************************************************************
  * external functions
  ***************************************************************************/
 
 void pager_init(int nframes, int nblocks) {
+  pthread_mutex_init(&pager.mutex, NULL);
+
   pager.clock = -1;
 
   pager.nframes = nframes;
   pager.frames_free = nframes;
+
   pager.frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
 
   for (int i=0; i<nframes; i++) {
@@ -73,26 +87,20 @@ void pager_init(int nframes, int nblocks) {
 
   pager.block2pid = (pid_t*) malloc(nblocks * sizeof(pid_t));
 
+  for (int i=0; i<nblocks; i++) {
+    pager.block2pid[i] = -1;
+  }
+
   // In the worst case, there will be a process for each block
   pager.pid2proc = (proc_t**) malloc(nblocks * sizeof(pid_t*));
   
   for (int i=0; i<nblocks; i++) {
-    pager.block2pid[i] = -1;
-
     pager.pid2proc[i] = (proc_t*) malloc(sizeof(proc_t));
-    pager.pid2proc[i]->pid = -1;
-    pager.pid2proc[i]->npages = 0;
     pager.pid2proc[i]->maxpages = (UVM_MAXADDR - UVM_BASEADDR + 1) / sysconf(_SC_PAGESIZE);
     pager.pid2proc[i]->pages = (page_data_t*) malloc(pager.pid2proc[i]->maxpages * sizeof(page_data_t));
 
-    for (int j=0; j<pager.pid2proc[i]->maxpages; j++) {
-      pager.pid2proc[i]->pages[j].frame = -1;
-      pager.pid2proc[i]->pages[j].block = -1;
-      pager.pid2proc[i]->pages[j].on_disk = 0;
-    }
+    clean_proc(pager.pid2proc[i]);
   }
-
-  pthread_mutex_init(&pager.mutex, NULL);
 }
 
 void pager_create(pid_t pid) {
@@ -323,15 +331,7 @@ void pager_destroy(pid_t pid) {
   // Cleaning proccess reference
   for (int i=0; i<pager.nblocks; i++) {
     if (pager.pid2proc[i]->pid == pid) {
-      pager.pid2proc[i]->pid = -1;
-
-      for (int j=0; j<pager.pid2proc[i]->npages; j++) {
-        pager.pid2proc[i]->pages[j].frame = -1;
-        pager.pid2proc[i]->pages[j].block = -1;
-        pager.pid2proc[i]->pages[j].on_disk = 0;
-      }
-
-      pager.pid2proc[i]->npages = 0;
+      clean_proc(pager.pid2proc[i]);
       break;
     }
   }
