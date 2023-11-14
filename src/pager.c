@@ -42,6 +42,21 @@ typedef struct pager {
 
 pager_t pager;
 
+/****************************************************************************
+ * internal functions
+ ***************************************************************************/
+
+void clean_frame(frame_data_t *frame) {
+  frame->pid = -1;
+  frame->page = -1;
+  frame->dirty = 0;
+  frame->prot = PROT_NONE;
+}
+
+/****************************************************************************
+ * external functions
+ ***************************************************************************/
+
 void pager_init(int nframes, int nblocks) {
   pager.clock = -1;
 
@@ -50,10 +65,7 @@ void pager_init(int nframes, int nblocks) {
   pager.frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
 
   for (int i=0; i<nframes; i++) {
-    pager.frames[i].pid = -1;
-    pager.frames[i].prot = PROT_NONE;
-    pager.frames[i].dirty = 0;
-    pager.frames[i].page = -1;
+    clean_frame(&pager.frames[i]);
   }
 
   pager.nblocks = nblocks;
@@ -203,9 +215,7 @@ void pager_fault(pid_t pid, void *addr) {
             procToDisk->pages[procToDiskPage].on_disk = 1;
           }
 
-          pager.frames[pager.clock].pid = -1;
-          pager.frames[pager.clock].dirty = 0;
-          pager.frames[pager.clock].prot = PROT_NONE;
+          clean_frame(&pager.frames[pager.clock]);
 
           pager.frames_free++;
 
@@ -305,10 +315,7 @@ void pager_destroy(pid_t pid) {
   // Cleaning frames
   for (int i=0; i<pager.nframes; i++) {
     if (pager.frames[i].pid == pid) {
-      pager.frames[i].pid = -1;
-      pager.frames[i].page = -1;
-      pager.frames[i].prot = PROT_NONE;
-      pager.frames[i].dirty = 0;
+      clean_frame(&pager.frames[i]);
       pager.frames_free++;
     }
   }
