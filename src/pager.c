@@ -8,6 +8,9 @@
 #include "pager.h"
 #include "mmu.h"
 
+#define handle_error(msg) \
+  do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
 typedef struct frame_data {
 	pid_t pid;
 	int page;
