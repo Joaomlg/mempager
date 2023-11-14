@@ -36,4 +36,5 @@ clean:
 	rm -f uvm.log.0
 	rm -f test*.out
 	rm -rf bin
+	rm -rf log
 	pgrep --list-full mmu || true
