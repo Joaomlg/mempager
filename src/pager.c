@@ -67,6 +67,10 @@ void clean_proc(proc_t *proc) {
   }
 }
 
+void clean_block(int block) {
+  pager.block2pid[block] = -1;
+}
+
 proc_t* get_proc(pid_t pid) {
   for (int i=0; i<pager.nblocks; i++) {
     if (pager.pid2proc[i]->pid == pid) {
@@ -74,6 +78,15 @@ proc_t* get_proc(pid_t pid) {
     }
   }
   return NULL;
+}
+
+int get_free_block() {
+  for (int block = 0; block<pager.nblocks; block++) {
+    if (pager.block2pid[block] == -1) {
+      return block;
+    }
+  }
+  return -1;
 }
 
 /****************************************************************************
@@ -100,7 +113,7 @@ void pager_init(int nframes, int nblocks) {
   pager.block2pid = (pid_t*) malloc(nblocks * sizeof(pid_t));
 
   for (int i=0; i<nblocks; i++) {
-    pager.block2pid[i] = -1;
+    clean_block(i);
   }
 
   // In the worst case, there will be a process for each block
@@ -145,25 +158,21 @@ void *pager_extend(pid_t pid) {
 
   if (proc->npages + 1 > proc->maxpages) {
     pthread_mutex_unlock(&pager.mutex);
-    return NULL;  // TODO: throw an error?!
+    return NULL;
   }
 
-  int block = 0;
-  for (; block<pager.nblocks; block++) {
-    if (pager.block2pid[block] == -1) {
-      break;
-    }
-  }
+  int block = get_free_block();
 
   pager.block2pid[block] = pid;
   pager.blocks_free--;
 
   proc->pages[proc->npages].block = block;
-
   proc->npages++;
 
+  void *vaddr = (void*) UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE);
+
   pthread_mutex_unlock(&pager.mutex);
-  return (void*) UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE);
+  return vaddr;
 }
 
 void pager_fault(pid_t pid, void *addr) {
@@ -324,7 +333,7 @@ void pager_destroy(pid_t pid) {
   // Cleaning blocks
   for (int i=0; i<pager.nblocks; i++) {
     if (pager.block2pid[i] == pid) {
-      pager.block2pid[i] = -1;
+      clean_block(i);
       pager.blocks_free++;
     }
   }
