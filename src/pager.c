@@ -302,6 +302,10 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
 
   char* buf = (char*) malloc((len + 1) * sizeof(char));
 
+  if (buf == NULL) {
+    handle_error("Could not allocate buffer to syslog");
+  }
+
   for (int i=0; i<len; i++) {
     int page = addr_to_page((intptr_t)addr + i);
 
