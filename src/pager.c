@@ -89,6 +89,14 @@ int get_free_block() {
   return -1;
 }
 
+int addr_to_page(intptr_t addr) {
+  return ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+}
+
+intptr_t page_to_addr(int page) {
+  return UVM_BASEADDR + page * sysconf(_SC_PAGESIZE);
+}
+
 /****************************************************************************
  * external functions
  ***************************************************************************/
@@ -169,7 +177,7 @@ void *pager_extend(pid_t pid) {
   proc->pages[proc->npages].block = block;
   proc->npages++;
 
-  void *vaddr = (void*) UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE);
+  void *vaddr = (void*) page_to_addr(proc->npages - 1);
 
   pthread_mutex_unlock(&pager.mutex);
   return vaddr;
@@ -184,11 +192,11 @@ void pager_fault(pid_t pid, void *addr) {
     handle_error("Could not find process with giving pid");
   }
 
-  int page = ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+  int page = addr_to_page((intptr_t)addr);
 
   if (page >= proc->npages) {
     pthread_mutex_unlock(&pager.mutex);
-    return;  // TODO: throw an error?! (segmentation fault)
+    return;
   }
 
   if (proc->pages[page].frame == -1) {
@@ -199,7 +207,7 @@ void pager_fault(pid_t pid, void *addr) {
         pager.clock++;
         pager.clock %= pager.nframes;
 
-        void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE)));
+        void *vaddr = (void*) page_to_addr(pager.frames[pager.clock].page);
 
         if (pager.frames[pager.clock].prot == PROT_NONE) {
           // Find a frame that can be desalocated
@@ -264,7 +272,7 @@ void pager_fault(pid_t pid, void *addr) {
 
     proc->pages[page].frame = frame;
 
-    void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (page * sysconf(_SC_PAGESIZE)));
+    void *vaddr = (void*) page_to_addr(page);
 
     mmu_resident(pid, vaddr, frame, pager.frames[frame].prot);
   } else {
@@ -275,7 +283,7 @@ void pager_fault(pid_t pid, void *addr) {
     pager.frames[frame].prot |= PROT_WRITE;
     pager.frames[frame].dirty = 1;
 
-    void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (page * sysconf(_SC_PAGESIZE)));
+    void *vaddr = (void*) page_to_addr(page);
 
     mmu_chprot(pid, vaddr, pager.frames[frame].prot);
   }
@@ -295,7 +303,7 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
   char* buf = (char*) malloc((len + 1) * sizeof(char));
 
   for (int i=0; i<len; i++) {
-    int page = ((intptr_t)addr + i - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+    int page = addr_to_page((intptr_t)addr + i);
 
     if (page >= proc->npages || proc->pages[page].frame == -1) {
       pthread_mutex_unlock(&pager.mutex);
