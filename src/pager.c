@@ -97,6 +97,62 @@ intptr_t page_to_addr(int page) {
   return UVM_BASEADDR + page * sysconf(_SC_PAGESIZE);
 }
 
+int get_free_frame() {
+  for (int frame = 0; frame<pager.nframes; frame++) {
+    if (pager.frames[frame].pid == -1) {
+      return frame;
+    }
+  }
+  return -1;
+}
+
+int should_give_second_chance(frame_data_t *frame) {
+  return frame->prot != PROT_NONE;
+}
+
+void give_second_chance(frame_data_t *frame) {
+  frame->prot = PROT_NONE;
+  mmu_chprot(frame->pid, (void*)page_to_addr(frame->page), frame->prot);
+}
+
+page_data_t *get_proc_page_by_frame(proc_t *proc, int frame) {
+  for (int page = 0; page<proc->maxpages; page++) {
+    if (proc->pages[page].frame == frame) {
+      return &proc->pages[page];
+    }
+  }
+  return NULL;
+}
+
+int release_frame() {
+  while(1) {
+    pager.clock = (pager.clock + 1) % pager.nframes;
+
+    frame_data_t *frame = &pager.frames[pager.clock];
+    
+    if (should_give_second_chance(frame)) {
+      give_second_chance(frame);
+      continue;
+    }
+
+    proc_t *proc = get_proc(frame->pid);
+    page_data_t *page = get_proc_page_by_frame(proc, pager.clock);
+
+    page->frame = -1;
+    mmu_nonresident(proc->pid, (void*)page_to_addr(frame->page));
+
+    if (frame->dirty == 1) {
+      mmu_disk_write(pager.clock, page->block);
+      page->on_disk = 1;
+    }
+
+    clean_frame(frame);
+    pager.frames_free++;
+
+    return pager.clock;
+  }
+}
+
 /****************************************************************************
  * external functions
  ***************************************************************************/
@@ -199,94 +255,40 @@ void pager_fault(pid_t pid, void *addr) {
     return;
   }
 
-  if (proc->pages[page].frame == -1) {
-    // Proc hasn't the page
-    // Probably is trying to read
-    if (pager.frames_free == 0) {
-      while(1){
-        pager.clock++;
-        pager.clock %= pager.nframes;
+  // It's necessary to remove some offset
+  void *vaddr = (void*) page_to_addr(page);
 
-        void *vaddr = (void*) page_to_addr(pager.frames[pager.clock].page);
-
-        if (pager.frames[pager.clock].prot == PROT_NONE) {
-          // Find a frame that can be desalocated
-
-          proc_t *procToDisk = NULL;
-          for (int i=0; i<pager.nblocks; i++) {
-            if (pager.pid2proc[i]->pid == pager.frames[pager.clock].pid) {
-              procToDisk = pager.pid2proc[i];
-              break;
-            }
-          }
-
-          int procToDiskPage = 0;
-          for (; procToDiskPage<procToDisk->maxpages; procToDiskPage++) {
-            if (procToDisk->pages[procToDiskPage].frame == pager.clock) {
-              break;
-            }
-          }
-
-          procToDisk->pages[procToDiskPage].frame = -1;
-
-          mmu_nonresident(procToDisk->pid, vaddr);
-
-          // Just move to disk if frame is dirty
-          if (pager.frames[pager.clock].dirty == 1) {
-            mmu_disk_write(pager.clock, procToDisk->pages[procToDiskPage].block);
-            procToDisk->pages[procToDiskPage].on_disk = 1;
-          }
-
-          clean_frame(&pager.frames[pager.clock]);
-
-          pager.frames_free++;
-
-          break;
-        } else {
-          // Give a second chance to the frame
-          pager.frames[pager.clock].prot = PROT_NONE;
-          mmu_chprot(pager.frames[pager.clock].pid, vaddr, pager.frames[pager.clock].prot);
-        }
-      }
-    }
-
-    int frame = 0;
-    for (; frame<pager.nframes; frame++) {
-      if (pager.frames[frame].pid == -1) {
-        break;
-      }
-    }
-
-    pager.frames[frame].pid = pid;
-    pager.frames[frame].page = page;
-    pager.frames[frame].prot = PROT_READ;
-    pager.frames[frame].dirty = 0;
-    pager.frames_free--;
-
-    if (proc->pages[page].on_disk) {
-      mmu_disk_read(proc->pages[page].block, frame);
-      proc->pages[page].on_disk = 0;
-    } else {
-      mmu_zero_fill(frame);
-    }
-
-    proc->pages[page].frame = frame;
-
-    void *vaddr = (void*) page_to_addr(page);
-
-    mmu_resident(pid, vaddr, frame, pager.frames[frame].prot);
-  } else {
-    // Proc already has the page
-    // Probably is trying to write
+  if (proc->pages[page].frame != -1) {
     int frame = proc->pages[page].frame;
 
     pager.frames[frame].prot |= PROT_WRITE;
     pager.frames[frame].dirty = 1;
 
-    void *vaddr = (void*) page_to_addr(page);
-
     mmu_chprot(pid, vaddr, pager.frames[frame].prot);
+
+    pthread_mutex_unlock(&pager.mutex);
+    return;
   }
+
+  int frame = pager.frames_free > 0
+    ? get_free_frame()
+    : release_frame();
+
+  pager.frames[frame].pid = pid;
+  pager.frames[frame].page = page;
+  pager.frames[frame].prot = PROT_READ;
+  pager.frames_free--;
+
+  if (proc->pages[page].on_disk) {
+    mmu_disk_read(proc->pages[page].block, frame);
+    proc->pages[page].on_disk = 0;
+  } else {
+    mmu_zero_fill(frame);
+  }
+
+  proc->pages[page].frame = frame;
+
+  mmu_resident(pid, vaddr, frame, pager.frames[frame].prot);
 
   pthread_mutex_unlock(&pager.mutex);
 }
