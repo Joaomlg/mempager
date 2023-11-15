@@ -334,7 +334,6 @@ void pager_destroy(pid_t pid) {
   proc_t *proc = get_proc(pid);
   clean_proc(proc);
 
-  // Cleaning frames
   for (int i=0; i<pager.nframes; i++) {
     if (pager.frames[i].pid == pid) {
       clean_frame(&pager.frames[i]);
@@ -342,7 +341,6 @@ void pager_destroy(pid_t pid) {
     }
   }
 
-  // Cleaning blocks
   for (int i=0; i<pager.nblocks; i++) {
     if (pager.block2pid[i] == pid) {
       clean_block(i);
