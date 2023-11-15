@@ -67,6 +67,15 @@ void clean_proc(proc_t *proc) {
   }
 }
 
+proc_t *get_free_proc() {
+  for (int i=0; i<pager.nblocks; i++) {
+    if (pager.pid2proc[i]->pid == -1) {
+      return pager.pid2proc[i];
+    }
+  }
+  return NULL;
+}
+
 /****************************************************************************
  * external functions
  ***************************************************************************/
@@ -109,13 +118,13 @@ void pager_init(int nframes, int nblocks) {
 void pager_create(pid_t pid) {
   pthread_mutex_lock(&pager.mutex);
 
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == -1) {
-      pager.pid2proc[i]->pid = pid;
-      pager.pid2proc[i]->npages = 0;
-      break;
-    }
+  proc_t *proc = get_free_proc();
+
+  if (proc == NULL) {
+    handle_error("Cannot get a free process");
   }
+
+  proc->pid = pid;
 
   pthread_mutex_unlock(&pager.mutex);
 }
