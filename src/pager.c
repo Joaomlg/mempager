@@ -67,9 +67,9 @@ void clean_proc(proc_t *proc) {
   }
 }
 
-proc_t *get_free_proc() {
+proc_t* get_proc(pid_t pid) {
   for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == -1) {
+    if (pager.pid2proc[i]->pid == pid) {
       return pager.pid2proc[i];
     }
   }
@@ -118,7 +118,7 @@ void pager_init(int nframes, int nblocks) {
 void pager_create(pid_t pid) {
   pthread_mutex_lock(&pager.mutex);
 
-  proc_t *proc = get_free_proc();
+  proc_t *proc = get_proc(-1);
 
   if (proc == NULL) {
     handle_error("Cannot get a free process");
@@ -131,24 +131,16 @@ void pager_create(pid_t pid) {
 
 void *pager_extend(pid_t pid) {
   pthread_mutex_lock(&pager.mutex);
-  proc_t *proc = NULL;
 
   if (pager.blocks_free == 0) {
     pthread_mutex_unlock(&pager.mutex);
     return NULL;
   }
 
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = get_proc(pid);
 
-  // TODO: throw an error?!
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return NULL;
+    handle_error("Could not find process with giving pid");
   }
 
   if (proc->npages + 1 > proc->maxpages) {
@@ -177,17 +169,10 @@ void *pager_extend(pid_t pid) {
 void pager_fault(pid_t pid, void *addr) {
   pthread_mutex_lock(&pager.mutex);
 
-  proc_t *proc = NULL;
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = get_proc(pid);
 
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return; // TODO: throw an error?!
+    handle_error("Could not find process with giving pid");
   }
 
   int page = ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
@@ -292,17 +277,10 @@ void pager_fault(pid_t pid, void *addr) {
 int pager_syslog(pid_t pid, void *addr, size_t len) {
   pthread_mutex_lock(&pager.mutex);
   
-  proc_t *proc = NULL;
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = get_proc(pid);
 
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return -1;
+    handle_error("Could not find process with giving pid");
   }
 
   char* buf = (char*) malloc((len + 1) * sizeof(char));
@@ -332,19 +310,14 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
 void pager_destroy(pid_t pid) {
   pthread_mutex_lock(&pager.mutex);
 
+  proc_t *proc = get_proc(pid);
+  clean_proc(proc);
+
   // Cleaning frames
   for (int i=0; i<pager.nframes; i++) {
     if (pager.frames[i].pid == pid) {
       clean_frame(&pager.frames[i]);
       pager.frames_free++;
-    }
-  }
-
-  // Cleaning proccess reference
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      clean_proc(pager.pid2proc[i]);
-      break;
     }
   }
 
