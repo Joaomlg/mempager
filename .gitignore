@@ -44,6 +44,7 @@ bin/
 *.idb
 *.pdb
 *.log*
+log/
 
 # Kernel Module Compile Results
 *.mod*

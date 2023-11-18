@@ -8,11 +8,14 @@
 #include "pager.h"
 #include "mmu.h"
 
+#define handle_error(msg) \
+  do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
 typedef struct frame_data {
 	pid_t pid;
 	int page;
 	int prot; /* PROT_READ (clean) or PROT_READ | PROT_WRITE (dirty) */
-	int dirty; /* prot may be reset by pager_free_frame() */
+	int dirty; /* 1 indicates frame was written */
 } frame_data_t;
 
 typedef struct page_data {
@@ -32,7 +35,7 @@ typedef struct pager {
 	pthread_mutex_t mutex;
 	int nframes;
 	int frames_free;
-	int clock;
+	int circular_frame_idx;
 	frame_data_t *frames;
 	int nblocks;
 	int blocks_free;
@@ -40,248 +43,197 @@ typedef struct pager {
 	proc_t **pid2proc;
 } pager_t;
 
-pager_t pager;
+pager_t *pager;
+
+/****************************************************************************
+ * auxiliar functions definitions
+ ***************************************************************************/
+
+/* Functions to manage frames */
+
+void pager_clean_frame(frame_data_t *frame);
+int pager_get_free_frame();
+int pager_release_and_get_frame();
+int pager_should_give_frame_second_chance(frame_data_t *frame);
+void pager_give_frame_second_chance(frame_data_t *frame);
+
+/* Functions to manage procs */
+
+void pager_clean_proc(proc_t *proc);
+proc_t* pager_get_proc(pid_t pid);
+int pager_is_proc_page_nonresident(proc_t *proc, int page);
+void pager_set_proc_page_write_prot(proc_t *proc, int page);
+void pager_reside_proc_page(proc_t *proc, int page);
+
+/* Functions to manage blocks */
+
+void pager_clean_block(int block);
+int pager_get_free_block();
+page_data_t *pager_get_proc_page_by_frame(proc_t *proc, int frame);
+
+/* Functions to convert virtual address */
+
+int pager_addr_to_page(intptr_t addr);
+intptr_t pager_page_to_addr(int page);
+
+/****************************************************************************
+ * external functions
+ ***************************************************************************/
 
 void pager_init(int nframes, int nblocks) {
-  pager.clock = -1;
+  pager = (pager_t*) malloc(sizeof(pager_t));
 
-  pager.nframes = nframes;
-  pager.frames_free = nframes;
-  pager.frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
+  if (pager == NULL) {
+    handle_error("Cannot allocate memory to pager struct");
+  }
+
+  pthread_mutex_init(&pager->mutex, NULL);
+
+  pager->circular_frame_idx = -1;
+
+  pager->nframes = nframes;
+  pager->frames_free = nframes;
+
+  pager->frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
+
+  if (pager->frames == NULL) {
+    handle_error("Cannot allocate memory to pager frames struct");
+  }
 
   for (int i=0; i<nframes; i++) {
-    pager.frames[i].pid = -1;
-    pager.frames[i].prot = PROT_NONE;
-    pager.frames[i].dirty = 0;
-    pager.frames[i].page = -1;
+    pager_clean_frame(&pager->frames[i]);
   }
 
-  pager.nblocks = nblocks;
-  pager.blocks_free = nblocks;
+  pager->nblocks = nblocks;
+  pager->blocks_free = nblocks;
 
-  pager.block2pid = (pid_t*) malloc(nblocks * sizeof(pid_t));
+  pager->block2pid = (pid_t*) malloc(nblocks * sizeof(pid_t));
+
+  if (pager->frames == NULL) {
+    handle_error("Cannot allocate memory to pager blocks struct");
+  }
+
+  for (int i=0; i<nblocks; i++) {
+    pager_clean_block(i);
+  }
 
   // In the worst case, there will be a process for each block
-  pager.pid2proc = (proc_t**) malloc(nblocks * sizeof(pid_t*));
+  pager->pid2proc = (proc_t**) malloc(nblocks * sizeof(pid_t*));
+
+  if (pager->pid2proc == NULL) {
+    handle_error("Cannot allocate memory to pager proc list struct");
+  }
   
   for (int i=0; i<nblocks; i++) {
-    pager.block2pid[i] = -1;
+    pager->pid2proc[i] = (proc_t*) malloc(sizeof(proc_t));
 
-    pager.pid2proc[i] = (proc_t*) malloc(sizeof(proc_t));
-    pager.pid2proc[i]->pid = -1;
-    pager.pid2proc[i]->npages = 0;
-    pager.pid2proc[i]->maxpages = (UVM_MAXADDR - UVM_BASEADDR + 1) / sysconf(_SC_PAGESIZE);
-    pager.pid2proc[i]->pages = (page_data_t*) malloc(pager.pid2proc[i]->maxpages * sizeof(page_data_t));
-
-    for (int j=0; j<pager.pid2proc[i]->maxpages; j++) {
-      pager.pid2proc[i]->pages[j].frame = -1;
-      pager.pid2proc[i]->pages[j].block = -1;
-      pager.pid2proc[i]->pages[j].on_disk = 0;
+    if (pager->pid2proc[i] == NULL) {
+      handle_error("Cannot allocate memory to pager proc struct");
     }
-  }
 
-  pthread_mutex_init(&pager.mutex, NULL);
+    pager->pid2proc[i]->maxpages = (UVM_MAXADDR - UVM_BASEADDR + 1) / sysconf(_SC_PAGESIZE);
+    pager->pid2proc[i]->pages = (page_data_t*) malloc(pager->pid2proc[i]->maxpages * sizeof(page_data_t));
+
+    if (pager->pid2proc[i]->pages == NULL) {
+      handle_error("Cannot allocate memory to pager proc page list struct");
+    }
+
+    pager_clean_proc(pager->pid2proc[i]);
+  }
 }
 
 void pager_create(pid_t pid) {
-  pthread_mutex_lock(&pager.mutex);
+  pthread_mutex_lock(&pager->mutex);
 
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == -1) {
-      pager.pid2proc[i]->pid = pid;
-      pager.pid2proc[i]->npages = 0;
-      break;
-    }
+  proc_t *proc = pager_get_proc(-1);
+
+  if (proc == NULL) {
+    handle_error("Cannot get a free process");
   }
 
-  pthread_mutex_unlock(&pager.mutex);
+  proc->pid = pid;
+
+  pthread_mutex_unlock(&pager->mutex);
 }
 
 void *pager_extend(pid_t pid) {
-  pthread_mutex_lock(&pager.mutex);
-  proc_t *proc = NULL;
+  pthread_mutex_lock(&pager->mutex);
 
-  if (pager.blocks_free == 0) {
-    pthread_mutex_unlock(&pager.mutex);
+  if (pager->blocks_free == 0) {
+    pthread_mutex_unlock(&pager->mutex);
     return NULL;
   }
 
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = pager_get_proc(pid);
 
-  // TODO: throw an error?!
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return NULL;
+    handle_error("Could not find process with giving pid");
   }
 
   if (proc->npages + 1 > proc->maxpages) {
-    pthread_mutex_unlock(&pager.mutex);
-    return NULL;  // TODO: throw an error?!
+    pthread_mutex_unlock(&pager->mutex);
+    return NULL;
   }
 
-  int block = 0;
-  for (; block<pager.nblocks; block++) {
-    if (pager.block2pid[block] == -1) {
-      break;
-    }
-  }
-
-  pager.block2pid[block] = pid;
-  pager.blocks_free--;
-
+  int block = pager_get_free_block();
+  
+  pager->block2pid[block] = proc->pid;
   proc->pages[proc->npages].block = block;
+
+  pager->blocks_free--;
 
   proc->npages++;
 
-  pthread_mutex_unlock(&pager.mutex);
-  return (void*) UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE);
+  void *vaddr = (void*) pager_page_to_addr(proc->npages - 1);
+
+  pthread_mutex_unlock(&pager->mutex);
+  return vaddr;
 }
 
 void pager_fault(pid_t pid, void *addr) {
-  pthread_mutex_lock(&pager.mutex);
+  pthread_mutex_lock(&pager->mutex);
 
-  proc_t *proc = NULL;
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = pager_get_proc(pid);
 
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return; // TODO: throw an error?!
+    handle_error("Could not find process with giving pid");
   }
 
-  int page = ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+  int page = pager_addr_to_page((intptr_t)addr);
 
   if (page >= proc->npages) {
-    pthread_mutex_unlock(&pager.mutex);
-    return;  // TODO: throw an error?! (segmentation fault)
+    handle_error("Process with giving pid cannot access the requested addr");
   }
 
-  if (proc->pages[page].frame == -1) {
-    // Proc hasn't the page
-    // Probably is trying to read
-    if (pager.frames_free == 0) {
-      while(1){
-        pager.clock++;
-        pager.clock %= pager.nframes;
-
-        void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (pager.frames[pager.clock].page * sysconf(_SC_PAGESIZE)));
-
-        if (pager.frames[pager.clock].prot == PROT_NONE) {
-          // Find a frame that can be desalocated
-
-          proc_t *procToDisk = NULL;
-          for (int i=0; i<pager.nblocks; i++) {
-            if (pager.pid2proc[i]->pid == pager.frames[pager.clock].pid) {
-              procToDisk = pager.pid2proc[i];
-              break;
-            }
-          }
-
-          int procToDiskPage = 0;
-          for (; procToDiskPage<procToDisk->maxpages; procToDiskPage++) {
-            if (procToDisk->pages[procToDiskPage].frame == pager.clock) {
-              break;
-            }
-          }
-
-          procToDisk->pages[procToDiskPage].frame = -1;
-
-          mmu_nonresident(procToDisk->pid, vaddr);
-
-          // Just move to disk if frame is dirty
-          if (pager.frames[pager.clock].dirty == 1) {
-            mmu_disk_write(pager.clock, procToDisk->pages[procToDiskPage].block);
-            procToDisk->pages[procToDiskPage].on_disk = 1;
-          }
-
-          pager.frames[pager.clock].pid = -1;
-          pager.frames[pager.clock].dirty = 0;
-          pager.frames[pager.clock].prot = PROT_NONE;
-
-          pager.frames_free++;
-
-          break;
-        } else {
-          // Give a second chance to the frame
-          pager.frames[pager.clock].prot = PROT_NONE;
-          mmu_chprot(pager.frames[pager.clock].pid, vaddr, pager.frames[pager.clock].prot);
-        }
-      }
-    }
-
-    int frame = 0;
-    for (; frame<pager.nframes; frame++) {
-      if (pager.frames[frame].pid == -1) {
-        break;
-      }
-    }
-
-    pager.frames[frame].pid = pid;
-    pager.frames[frame].page = page;
-    pager.frames[frame].prot = PROT_READ;
-    pager.frames[frame].dirty = 0;
-    pager.frames_free--;
-
-    if (proc->pages[page].on_disk) {
-      mmu_disk_read(proc->pages[page].block, frame);
-      proc->pages[page].on_disk = 0;
-    } else {
-      mmu_zero_fill(frame);
-    }
-
-    proc->pages[page].frame = frame;
-
-    void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (page * sysconf(_SC_PAGESIZE)));
-
-    mmu_resident(pid, vaddr, frame, pager.frames[frame].prot);
+  if (pager_is_proc_page_nonresident(proc, page)) {
+    pager_reside_proc_page(proc, page);
   } else {
-    // Proc already has the page
-    // Probably is trying to write
-    int frame = proc->pages[page].frame;
-
-    pager.frames[frame].prot |= PROT_WRITE;
-    pager.frames[frame].dirty = 1;
-
-    void *vaddr = (void*) (UVM_BASEADDR + (intptr_t) (page * sysconf(_SC_PAGESIZE)));
-
-    mmu_chprot(pid, vaddr, pager.frames[frame].prot);
+    pager_set_proc_page_write_prot(proc, page);
   }
 
-  pthread_mutex_unlock(&pager.mutex);
+  pthread_mutex_unlock(&pager->mutex);
 }
 
 int pager_syslog(pid_t pid, void *addr, size_t len) {
-  pthread_mutex_lock(&pager.mutex);
+  pthread_mutex_lock(&pager->mutex);
   
-  proc_t *proc = NULL;
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      proc = pager.pid2proc[i];
-      break;
-    }
-  }
+  proc_t *proc = pager_get_proc(pid);
 
   if (proc == NULL) {
-    pthread_mutex_unlock(&pager.mutex);
-    return -1;
+    handle_error("Could not find process with giving pid");
   }
 
   char* buf = (char*) malloc((len + 1) * sizeof(char));
 
-  for (int i=0; i<len; i++) {
-    int page = ((intptr_t)addr + i - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+  if (buf == NULL) {
+    handle_error("Could not allocate buffer to syslog");
+  }
 
-    if (page >= proc->npages || proc->pages[page].frame == -1) {
-      pthread_mutex_unlock(&pager.mutex);
+  for (int i=0; i<len; i++) {
+    int page = pager_addr_to_page((intptr_t)addr + i);
+
+    if (page >= proc->npages || pager_is_proc_page_nonresident(proc, page)) {
+      pthread_mutex_unlock(&pager->mutex);
       return -1;
     }
 
@@ -295,47 +247,175 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
 
   free(buf);
 
-  pthread_mutex_unlock(&pager.mutex);
+  pthread_mutex_unlock(&pager->mutex);
   return 0;
 }
 
 void pager_destroy(pid_t pid) {
-  pthread_mutex_lock(&pager.mutex);
+  pthread_mutex_lock(&pager->mutex);
 
-  // Cleaning frames
-  for (int i=0; i<pager.nframes; i++) {
-    if (pager.frames[i].pid == pid) {
-      pager.frames[i].pid = -1;
-      pager.frames[i].page = -1;
-      pager.frames[i].prot = PROT_NONE;
-      pager.frames[i].dirty = 0;
-      pager.frames_free++;
+  proc_t *proc = pager_get_proc(pid);
+  pager_clean_proc(proc);
+
+  for (int i=0; i<pager->nframes; i++) {
+    if (pager->frames[i].pid == pid) {
+      pager_clean_frame(&pager->frames[i]);
+      pager->frames_free++;
     }
   }
 
-  // Cleaning proccess reference
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.pid2proc[i]->pid == pid) {
-      pager.pid2proc[i]->pid = -1;
-
-      for (int j=0; j<pager.pid2proc[i]->npages; j++) {
-        pager.pid2proc[i]->pages[j].frame = -1;
-        pager.pid2proc[i]->pages[j].block = -1;
-        pager.pid2proc[i]->pages[j].on_disk = 0;
-      }
-
-      pager.pid2proc[i]->npages = 0;
-      break;
+  for (int i=0; i<pager->nblocks; i++) {
+    if (pager->block2pid[i] == pid) {
+      pager_clean_block(i);
+      pager->blocks_free++;
     }
   }
 
-  // Cleaning blocks
-  for (int i=0; i<pager.nblocks; i++) {
-    if (pager.block2pid[i] == pid) {
-      pager.block2pid[i] = -1;
-      pager.blocks_free++;
+  pthread_mutex_unlock(&pager->mutex);
+}
+
+/****************************************************************************
+ * auxiliar functions implementation
+ ***************************************************************************/
+
+void pager_clean_frame(frame_data_t *frame) {
+  frame->pid = -1;
+  frame->page = -1;
+  frame->dirty = 0;
+  frame->prot = PROT_NONE;
+}
+
+int pager_get_free_frame() {
+  for (int frame = 0; frame<pager->nframes; frame++) {
+    if (pager->frames[frame].pid == -1) {
+      return frame;
     }
   }
+  return -1;
+}
 
-  pthread_mutex_unlock(&pager.mutex);
+int pager_release_and_get_frame() {
+  while(1) {
+    pager->circular_frame_idx = (pager->circular_frame_idx + 1) % pager->nframes;
+
+    frame_data_t *frame = &pager->frames[pager->circular_frame_idx];
+    
+    if (pager_should_give_frame_second_chance(frame)) {
+      pager_give_frame_second_chance(frame);
+      continue;
+    }
+
+    proc_t *proc = pager_get_proc(frame->pid);
+    page_data_t *page = pager_get_proc_page_by_frame(proc, pager->circular_frame_idx);
+
+    page->frame = -1;
+    mmu_nonresident(proc->pid, (void*)pager_page_to_addr(frame->page));
+
+    if (frame->dirty == 1) {
+      mmu_disk_write(pager->circular_frame_idx, page->block);
+      page->on_disk = 1;
+    }
+
+    pager_clean_frame(frame);
+    pager->frames_free++;
+
+    return pager->circular_frame_idx;
+  }
+}
+
+int pager_should_give_frame_second_chance(frame_data_t *frame) {
+  return frame->prot != PROT_NONE;
+}
+
+void pager_give_frame_second_chance(frame_data_t *frame) {
+  frame->prot = PROT_NONE;
+  mmu_chprot(frame->pid, (void*)pager_page_to_addr(frame->page), frame->prot);
+}
+
+void pager_clean_proc(proc_t *proc) {
+  proc->pid = -1;
+  proc->npages = 0;
+
+  for (int j=0; j<proc->maxpages; j++) {
+    proc->pages[j].frame = -1;
+    proc->pages[j].block = -1;
+    proc->pages[j].on_disk = 0;
+  }
+}
+
+proc_t* pager_get_proc(pid_t pid) {
+  for (int i=0; i<pager->nblocks; i++) {
+    if (pager->pid2proc[i]->pid == pid) {
+      return pager->pid2proc[i];
+    }
+  }
+  return NULL;
+}
+
+int pager_is_proc_page_nonresident(proc_t *proc, int page) {
+  return proc->pages[page].frame == -1;
+}
+
+void pager_set_proc_page_write_prot(proc_t *proc, int page) {
+  int frame = proc->pages[page].frame;
+
+  pager->frames[frame].prot |= PROT_WRITE;
+  pager->frames[frame].dirty = 1;
+
+  void *vaddr = (void*) pager_page_to_addr(page);
+
+  mmu_chprot(proc->pid, vaddr, pager->frames[frame].prot);
+}
+
+void pager_reside_proc_page(proc_t *proc, int page) {
+  int frame = pager->frames_free > 0
+    ? pager_get_free_frame()
+    : pager_release_and_get_frame();
+
+  pager->frames[frame].pid = proc->pid;
+  pager->frames[frame].page = page;
+  pager->frames[frame].prot = PROT_READ;
+  pager->frames_free--;
+
+  if (proc->pages[page].on_disk) {
+    mmu_disk_read(proc->pages[page].block, frame);
+    proc->pages[page].on_disk = 0;
+  } else {
+    mmu_zero_fill(frame);
+  }
+
+  proc->pages[page].frame = frame;
+
+  void *vaddr = (void*) pager_page_to_addr(page);
+  mmu_resident(proc->pid, vaddr, frame, pager->frames[frame].prot);
+}
+
+void pager_clean_block(int block) {
+  pager->block2pid[block] = -1;
+}
+
+int pager_get_free_block() {
+  for (int block=0; block<pager->nblocks; block++) {
+    if (pager->block2pid[block] == -1) {
+      return block;
+    }
+  }
+  return -1;
+}
+
+page_data_t *pager_get_proc_page_by_frame(proc_t *proc, int frame) {
+  for (int page=0; page<proc->maxpages; page++) {
+    if (proc->pages[page].frame == frame) {
+      return &proc->pages[page];
+    }
+  }
+  return NULL;
+}
+
+int pager_addr_to_page(intptr_t addr) {
+  return ((intptr_t)addr - UVM_BASEADDR) / sysconf(_SC_PAGESIZE);
+}
+
+intptr_t pager_page_to_addr(int page) {
+  return UVM_BASEADDR + page * sysconf(_SC_PAGESIZE);
 }
