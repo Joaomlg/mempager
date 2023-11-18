@@ -64,7 +64,6 @@ proc_t* pager_get_proc(pid_t pid);
 int pager_is_proc_page_nonresident(proc_t *proc, int page);
 void pager_set_proc_page_write_prot(proc_t *proc, int page);
 void pager_reside_proc_page(proc_t *proc, int page);
-void pager_set_proc_block(proc_t* proc, int block);
 
 /* Functions to manage blocks */
 
@@ -177,7 +176,10 @@ void *pager_extend(pid_t pid) {
   }
 
   int block = pager_get_free_block();
-  pager_set_proc_block(proc, block);
+  
+  pager->block2pid[block] = proc->pid;
+  proc->pages[proc->npages].block = block;
+
   pager->blocks_free--;
 
   proc->npages++;
@@ -388,17 +390,12 @@ void pager_reside_proc_page(proc_t *proc, int page) {
   mmu_resident(proc->pid, vaddr, frame, pager->frames[frame].prot);
 }
 
-void pager_set_proc_block(proc_t* proc, int block) {
-  pager->block2pid[block] = proc->pid;
-  proc->pages[proc->npages].block = block;
-}
-
 void pager_clean_block(int block) {
   pager->block2pid[block] = -1;
 }
 
 int pager_get_free_block() {
-  for (int block = 0; block<pager->nblocks; block++) {
+  for (int block=0; block<pager->nblocks; block++) {
     if (pager->block2pid[block] == -1) {
       return block;
     }
@@ -407,7 +404,7 @@ int pager_get_free_block() {
 }
 
 page_data_t *pager_get_proc_page_by_frame(proc_t *proc, int frame) {
-  for (int page = 0; page<proc->maxpages; page++) {
+  for (int page=0; page<proc->maxpages; page++) {
     if (proc->pages[page].frame == frame) {
       return &proc->pages[page];
     }
