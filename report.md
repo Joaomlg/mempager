@@ -31,7 +31,7 @@
             // Propriedades referentes aos quadros
             int nframes; // Número máximo de quadros
             int frames_free; // Qnt. de quadros disponíveis
-            frame_data_t *frames; // Lista de quadros
+            frame_t *frames; // Lista de quadros
             // Propriedades referentes aos blocos
             int nblocks; // Número máximo de blocos
             int blocks_free; // Número de blocos disponíveis
@@ -48,12 +48,12 @@
         Sendo que, para cada quadro da memória, a seguinte estrutura foi estabelecida:
 
         ```c
-        typedef struct frame_data {
+        typedef struct frame {
             pid_t pid; // Id do processo que detem o quadro
             int page; // Página do processo contida no quadro
             int prot; // Nível de proteção do quadro
             int dirty; // Indica se o quadro foi escrito
-        } frame_data_t;
+        } frame_t;
         ```
 
         A informação do `pid` permite conferir se o quadro está disponível ou não, e a propriedade `page` indica qual página do processo está contida no quadro. Já a propriedade `prot` indica qual o nível de proteção do quadro, e é utilizado principalmente pelo algoritmo de segunda chance. Por fim, a propriedade `dirty` indica se o quadro deve ser transferido para o disco caso o quadro seja liberado para outro processo.
