@@ -11,24 +11,18 @@
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-typedef struct pager {
-	int nframes;
-	int frames_free;
-	frame_data_t *frames;
-	int nblocks;
-	int blocks_free;
-	pid_t *block2pid;
-	proc_t **pid2proc;
-	int circular_frame_idx;
-	pthread_mutex_t mutex;
-} pager_t;
-
 typedef struct frame_data {
 	pid_t pid;
 	int page;
 	int prot; /* PROT_READ (clean) or PROT_READ | PROT_WRITE (dirty) */
 	int dirty; /* 1 indicates frame was written */
 } frame_data_t;
+
+typedef struct page_data {
+	int block;
+	int on_disk; /* 1 indicates page was written to disk */
+	int frame; /* -1 indicates non-resident */
+} page_data_t;
 
 typedef struct proc {
 	pid_t pid;
@@ -37,11 +31,17 @@ typedef struct proc {
 	page_data_t *pages;
 } proc_t;
 
-typedef struct page_data {
-	int frame; /* -1 indicates non-resident */
-	int on_disk; /* 1 indicates page was written to disk */
-	int block;
-} page_data_t;
+typedef struct pager {
+	pthread_mutex_t mutex;
+	int nframes;
+	int frames_free;
+	int circular_frame_idx;
+	frame_data_t *frames;
+	int nblocks;
+	int blocks_free;
+	pid_t *block2pid;
+	proc_t **pid2proc;
+} pager_t;
 
 pager_t *pager;
 
