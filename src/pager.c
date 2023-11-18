@@ -11,24 +11,18 @@
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-typedef struct pager {
-	int nframes;
-	int frames_free;
-	frame_data_t *frames;
-	int nblocks;
-	int blocks_free;
-	pid_t *block2pid;
-	proc_t **pid2proc;
-	int circular_frame_idx;
-	pthread_mutex_t mutex;
-} pager_t;
-
-typedef struct frame_data {
+typedef struct frame {
 	pid_t pid;
 	int page;
 	int prot; /* PROT_READ (clean) or PROT_READ | PROT_WRITE (dirty) */
 	int dirty; /* 1 indicates frame was written */
-} frame_data_t;
+} frame_t;
+
+typedef struct page_data {
+	int block;
+	int on_disk; /* 1 indicates page was written to disk */
+	int frame; /* -1 indicates non-resident */
+} page_data_t;
 
 typedef struct proc {
 	pid_t pid;
@@ -37,11 +31,17 @@ typedef struct proc {
 	page_data_t *pages;
 } proc_t;
 
-typedef struct page_data {
-	int frame; /* -1 indicates non-resident */
-	int on_disk; /* 1 indicates page was written to disk */
-	int block;
-} page_data_t;
+typedef struct pager {
+	pthread_mutex_t mutex;
+	int nframes;
+	int frames_free;
+	int circular_frame_idx;
+	frame_t *frames;
+	int nblocks;
+	int blocks_free;
+	pid_t *block2pid;
+	proc_t **pid2proc;
+} pager_t;
 
 pager_t *pager;
 
@@ -51,11 +51,11 @@ pager_t *pager;
 
 /* Functions to manage frames */
 
-void pager_clean_frame(frame_data_t *frame);
+void pager_clean_frame(frame_t *frame);
 int pager_get_free_frame();
 int pager_release_and_get_frame();
-int pager_should_give_frame_second_chance(frame_data_t *frame);
-void pager_give_frame_second_chance(frame_data_t *frame);
+int pager_should_give_frame_second_chance(frame_t *frame);
+void pager_give_frame_second_chance(frame_t *frame);
 
 /* Functions to manage procs */
 
@@ -94,7 +94,7 @@ void pager_init(int nframes, int nblocks) {
   pager->nframes = nframes;
   pager->frames_free = nframes;
 
-  pager->frames = (frame_data_t*) malloc(nframes * sizeof(frame_data_t));
+  pager->frames = (frame_t*) malloc(nframes * sizeof(frame_t));
 
   if (pager->frames == NULL) {
     handle_error("Cannot allocate memory to pager frames struct");
@@ -278,7 +278,7 @@ void pager_destroy(pid_t pid) {
  * auxiliar functions implementation
  ***************************************************************************/
 
-void pager_clean_frame(frame_data_t *frame) {
+void pager_clean_frame(frame_t *frame) {
   frame->pid = -1;
   frame->page = -1;
   frame->dirty = 0;
@@ -298,7 +298,7 @@ int pager_release_and_get_frame() {
   while(1) {
     pager->circular_frame_idx = (pager->circular_frame_idx + 1) % pager->nframes;
 
-    frame_data_t *frame = &pager->frames[pager->circular_frame_idx];
+    frame_t *frame = &pager->frames[pager->circular_frame_idx];
     
     if (pager_should_give_frame_second_chance(frame)) {
       pager_give_frame_second_chance(frame);
@@ -323,11 +323,11 @@ int pager_release_and_get_frame() {
   }
 }
 
-int pager_should_give_frame_second_chance(frame_data_t *frame) {
+int pager_should_give_frame_second_chance(frame_t *frame) {
   return frame->prot != PROT_NONE;
 }
 
-void pager_give_frame_second_chance(frame_data_t *frame) {
+void pager_give_frame_second_chance(frame_t *frame) {
   frame->prot = PROT_NONE;
   mmu_chprot(frame->pid, (void*)pager_page_to_addr(frame->page), frame->prot);
 }
