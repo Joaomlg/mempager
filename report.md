@@ -16,9 +16,10 @@
 
 3. Referências bibliográficas
 
-    - Slides da disciplina;
-    - https://man7.org/linux/man-pages/man3/sysconf.3.html;
-    - https://man7.org/linux/man-pages/man3/intptr_t.3type.html;
+    - Material da disciplina;
+    - [mempager-assignment](https://gitlab.dcc.ufmg.br/cunha-dcc605/mempager-assignment)
+    - [sysconf(3) — Linux manual page](https://man7.org/linux/man-pages/man3/sysconf.3.html);
+    - [intptr_t(3type) — Linux manual page](https://man7.org/linux/man-pages/man3/intptr_t.3type.html);
 
 4. Detalhes de implementação
 
